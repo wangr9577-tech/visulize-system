@@ -1,0 +1,13 @@
+import pandas as pd
+df = pd.read_csv('sentiment_data.csv')
+print(len(df[df['景区名称']=='普陀山']))
+print(len(df[df['景区名称']=='黄山']))
+print(len(df[df['景区名称']=='庐山']))
+print(len(df[df['景区名称']=='雁荡山']))
+print(len(df[df['景区名称']=='泰山']))
+print(len(df[df['景区名称']=='衡山']))
+print(len(df[df['景区名称']=='华山']))
+print(len(df[df['景区名称']=='恒山']))
+print(len(df[df['景区名称']=='嵩山']))
+print(len(df[df['景区名称']=='峨眉山']))
+print(len(df[df['景区名称']=='武夷山']))
