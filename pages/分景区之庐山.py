@@ -5,6 +5,7 @@ from streamlit_echarts import st_pyecharts
 from utils import data_loader, style, charts
 import numpy as np
 from PIL import Image
+from utils.navigation import create_sidebar_navigation
 
 # --- 页面基本配置 ---
 SCENIC_SPOT_NAME = "庐山"
@@ -18,7 +19,7 @@ st.set_page_config(
     page_icon="⛰️",
     layout="wide"
 )
-
+create_sidebar_navigation()
 # --- 加载数据和应用样式 ---
 style.set_page_background('assets/backgroud.png')
 df_full = data_loader.load_data('data/sentiment_data.csv')

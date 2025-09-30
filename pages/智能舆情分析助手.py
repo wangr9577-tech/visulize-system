@@ -2,174 +2,197 @@
 
 import streamlit as st
 import pandas as pd
-import requests
 from openai import OpenAI
-import os
+from utils import style
+import re
+from utils.navigation import create_sidebar_navigation
 
 # --- 页面设置 ---
-st.set_page_config(
-    page_title="AI 智能分析助手",
-    page_icon="🤖",
-    layout="wide"
-)
-
-# --- 导入并应用背景样式 ---
-from utils import style
-
+st.set_page_config(page_title="AI 智能分析与对话", page_icon="🤖", layout="wide")
 style.set_page_background('assets/backgroud.png')
 
-# --- 后端服务配置 ---
-# 主 Agent 服务地址，用于文件处理
-AGENT_BASE_URL = "http://127.0.0.1:8000"  # 使用 127.0.0.1 而不是 0.0.0.0
-FILE_ANALYSIS_ENDPOINT = f"{AGENT_BASE_URL}/analyze_reviews/"
+create_sidebar_navigation()
 
-# vLLM OpenAI 风格 API 地址，用于对话
-VLLM_BASE_URL = "http://hpc.wisesoe.com:58001/v1"
-VLLM_MODEL_NAME = "deepseek-r1-distill-qwen-vllm"
-
-
-# --- 与后端 AI Agent 交互的函数 ---
-
-def analyze_file_with_agent(uploaded_file):
-    """
-    通过 HTTP 请求将文件发送到主 Agent 服务进行处理。
-    期望后端返回一个 JSON，包含处理后的数据和分析建议。
-    """
-    try:
-        files = {'file': (uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type)}
-        response = requests.post(FILE_ANALYSIS_ENDPOINT, files=files, timeout=300)  # 设置较长的超时
-
-        if response.status_code == 200:
-            result = response.json()
-            # 假设后端返回格式为: {"structured_data": [...], "suggestions": "..."}
-            processed_df = pd.DataFrame(result.get("structured_data"))
-            suggestions_text = result.get("suggestions")
-            return processed_df, suggestions_text
-        else:
-            error_message = f"文件分析失败。服务器返回状态码: {response.status_code}。错误信息: {response.text}"
-            return None, error_message
-    except requests.exceptions.RequestException as e:
-        error_message = f"无法连接到分析服务，请确认AI Agent主服务正在 {AGENT_BASE_URL} 运行。错误详情: {e}"
-        return None, error_message
-
-
-# --- 与 vLLM 服务交互的函数 ---
-
-# 初始化 OpenAI 客户端，指向您的 vLLM 服务
-try:
-    client = OpenAI(
-        base_url=VLLM_BASE_URL,
-        api_key="not-needed"  # 对于本地或私有部署的服务，API密钥通常不是必需的
-    )
-except Exception as e:
-    st.error(f"初始化OpenAI客户端失败: {e}")
-    client = None
-
-
-def get_chat_response(messages):
-    """
-    使用 OpenAI 客户端与您的 vLLM 模型进行对话。
-    """
-    if not client:
-        return "错误：无法与AI对话服务建立连接。"
-    try:
-        response = client.chat.completions.create(
-            model=VLLM_MODEL_NAME,
-            messages=messages,
-            temperature=0.7,
-        )
-        return response.choices[0].message.content
-    except Exception as e:
-        st.error(f"与AI对话时发生错误: {e}")
-        return "抱歉，我在回答时遇到了一个问题。"
-
-
-# --- Streamlit 页面 UI ---
-
-st.title("🤖 智能舆情分析助手")
-st.markdown(
-    "上传您的原始评论文件（CSV或Excel），AI将调用BERT模型进行结构化处理，并由大语言模型生成深度分析报告。随后，您可就报告内容与AI进行对话。")
-st.markdown("---")
+# --- [核心修改] API服务地址变为固定常量 ---
+# 地址配置不再在UI中显示，简化了界面
+AGENT_API_URL = "http://127.0.0.1:8000/v1"
+VLLM_URL = "http://hpc.wisesoe.com:58001/v1"
 
 # --- 初始化 Session State ---
-if "analysis_report" not in st.session_state:
-    st.session_state.analysis_report = None
-if "structured_data" not in st.session_state:
-    st.session_state.structured_data = None
+# 新增 chat_messages 用于存储对话历史
+# 新增 processing_complete 用于控制UI流程
+if "analysis_results" not in st.session_state:
+    st.session_state.analysis_results = None
+if "suggestions" not in st.session_state:
+    st.session_state.suggestions = None
 if "chat_messages" not in st.session_state:
     st.session_state.chat_messages = []
-if "file_processed" not in st.session_state:
-    st.session_state.file_processed = False
+if "processing_complete" not in st.session_state:
+    st.session_state.processing_complete = False
 
-# --- 1. 文件上传与分析 ---
+# --- 初始化 API 客户端 ---
+try:
+    agent_client = OpenAI(base_url=AGENT_API_URL, api_key="not-needed")
+    vllm_client = OpenAI(base_url=VLLM_URL, api_key="not-needed")
+except Exception as e:
+    st.error(f"初始化API客户端失败: {e}")
+    agent_client = None
+    vllm_client = None
+
+
+# --- 文本解析与清理函数 ---
+def parse_agent_response(text: str) -> dict:
+    data = {}
+    patterns = {
+        "文本摘要": r"文本摘要(?:是|为|：|:)\s*['\"]?(.*?)['\"]?[\n，。]",
+        "核心问题类型": r"核心问题类型(?:是|为|：|:)\s*['\"]?(.*?)['\"]?[\n，。]",
+        "问题细项": r"问题细项(?:包括|是|为|：|:)\s*['\"]?(.*?)['\"]?[\n，。]",
+        "情感强度": r"情感强度(?:是|为|：|:)\s*['\"]?(.*?)['\"]?[\n，。]",
+        "是否恶意诋毁": r"是否恶意诋毁(?:是|为|：|:)\s*['\"]?(.*?)['\"]?[\n，。$]"
+    }
+    for key, pattern in patterns.items():
+        match = re.search(pattern, text, re.DOTALL)
+        data[key] = match.group(1).strip() if match else "N/A"
+    if all(v == "N/A" for v in data.values()):
+        old_patterns = {
+            "文本摘要": r"1\. 文本摘要：(.*?)\n", "核心问题类型": r"2\. 核心问题类型：(.*?)\n",
+            "问题细项": r"3\. 问题细项：(.*?)\n",
+            "情感强度": r"4\. 情感强度：(.*?)\n", "是否恶意诋毁": r"5\. 是否恶意诋毁：(.*?)$"
+        }
+        for key, pattern in old_patterns.items():
+            match = re.search(pattern, text, re.DOTALL)
+            data[key] = match.group(1).strip() if match else "N/A"
+    return data
+
+
+def clean_think_tags(text: str) -> str:
+    cleaned_text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    return cleaned_text.strip()
+
+
+# --- 主界面 UI ---
+st.title("🤖 AI 智能分析与对话")
+st.markdown("上传评论文件进行分析。分析完成后，您可以在下方与AI对话，深入探讨分析结果。")
+
+# --- 阶段一：文件上传与分析 ---
 with st.container(border=True):
     st.subheader("第一步：上传文件并启动分析")
-    uploaded_file = st.file_uploader(
-        "支持CSV或Excel格式的评论文件",
-        type=['csv', 'xlsx']
-    )
+    uploaded_file = st.file_uploader("支持CSV或Excel格式的评论文件", type=['csv', 'xlsx'])
 
-    if uploaded_file is not None:
-        if st.button("🚀 开始智能分析", type="primary", use_container_width=True):
-            with st.spinner("请稍候... AI Agent正在调用BERT模型进行深度分析..."):
-                df, report = analyze_file_with_agent(uploaded_file)
+    if uploaded_file and st.button("🚀 开始智能分析", type="primary", use_container_width=True):
+        # 重置状态
+        st.session_state.analysis_results = None
+        st.session_state.suggestions = None
+        st.session_state.chat_messages = []
+        st.session_state.processing_complete = False
 
-            if df is not None:
-                st.success("文件分析完成！")
-                st.session_state.structured_data = df
-                st.session_state.analysis_report = report
-                st.session_state.file_processed = True
-                # 清空旧的对话历史并添加新的系统提示
-                st.session_state.chat_messages = [
-                    {"role": "assistant",
-                     "content": "您好！我已经分析完您上传的文件。请查看下方的报告和数据，然后我们可以开始对话。"}
-                ]
-            else:
-                st.error(report)  # 如果失败，report变量会包含错误信息
-                st.session_state.file_processed = False
+        try:
+            df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
+            comment_col = '内容' if '内容' in df.columns else 'comment' if 'comment' in df.columns else None
+            if not comment_col:
+                st.error("上传的文件中未找到名为 '内容' 或 'comment' 的列。")
+                st.stop()
+            comments = df[comment_col].dropna().tolist()
+            if not comments:
+                st.warning("文件中没有找到可分析的评论。")
+                st.stop()
 
-# --- 2. 分析结果展示与对话 ---
-if st.session_state.file_processed:
+            # 批量处理
+            results_list = []
+            progress_bar = st.progress(0, text="开始分析...")
+            with st.spinner(f"正在逐条分析 {len(comments)} 条评论..."):
+                for i, comment in enumerate(comments):
+                    try:
+                        response = agent_client.chat.completions.create(model="tourism-sentiment-analyzer",
+                                                                        messages=[{"role": "user", "content": comment}])
+                        cleaned_text = clean_think_tags(response.choices[0].message.content)
+                        parsed_result = parse_agent_response(cleaned_text)
+                        parsed_result["原始评论"] = comment
+                        results_list.append(parsed_result)
+                    except Exception:
+                        pass  # 静默处理单条失败
+                    progress_bar.progress((i + 1) / len(comments), text=f"已分析 {i + 1}/{len(comments)} 条")
+            st.session_state.analysis_results = pd.DataFrame(results_list)
+            st.success("所有评论已完成结构化分析！")
+
+            # 生成综合建议
+            with st.spinner("AI 正在根据分析结果撰写综合改进建议..."):
+                summary_prompt = "你是一位经验丰富的景区运营总监...\n--- 负面评论数据摘要 ---\n"  # (为简洁省略完整Prompt)
+                issue_counts = st.session_state.analysis_results['核心问题类型'].value_counts()
+                summary_prompt += f"核心问题类型分布统计：\n{issue_counts.to_string()}\n\n"
+                top_issues = issue_counts.head(3).index
+                summary_prompt += "高频问题类型的评论摘要示例：\n"
+                for issue in top_issues:
+                    examples = \
+                    st.session_state.analysis_results[st.session_state.analysis_results['核心问题类型'] == issue][
+                        '文本摘要'].head(2).tolist()
+                    summary_prompt += f"- **对于'{issue}'**: {' | '.join(examples)}\n"
+                summary_prompt += "\n请开始撰写您的报告。不要包含思考过程或XML标签。"
+
+                suggestion_response = vllm_client.chat.completions.create(model="deepseek-r1-distill-qwen-vllm",
+                                                                          messages=[{"role": "user",
+                                                                                     "content": summary_prompt}],
+                                                                          temperature=0.6, max_tokens=1500)
+                st.session_state.suggestions = clean_think_tags(suggestion_response.choices[0].message.content)
+                st.success("综合改进建议已生成！")
+                st.session_state.processing_complete = True  # 标记处理完成
+        except Exception as e:
+            st.error(f"处理过程中发生严重错误: {e}")
+
+# --- 阶段二：结果展示与对话 ---
+if st.session_state.processing_complete:
     st.markdown("---")
-    st.subheader("第二步：查看分析报告并开始对话")
+    st.subheader("第二步：查看分析报告并与AI对话")
 
-    # 展示分析报告和结构化数据
-    with st.expander("点击查看AI生成的分析报告", expanded=True):
-        st.markdown(st.session_state.analysis_report)
+    # 折叠展示结果，保持界面整洁
+    with st.expander("📊 点击查看结构化分析结果详情"):
+        st.dataframe(st.session_state.analysis_results, use_container_width=True)
 
-    with st.expander("点击查看结构化数据详情"):
-        st.dataframe(st.session_state.structured_data, use_container_width=True)
+    with st.expander("📝 点击查看AI综合改进建议报告", expanded=True):
+        st.markdown(st.session_state.suggestions)
 
-    # 对话界面
-    st.markdown("#### 与AI对话")
+    st.markdown("---")
 
-    # 显示历史消息
+    # 初始化对话
+    if not st.session_state.chat_messages:
+        st.session_state.chat_messages.append(
+            {"role": "assistant", "content": "分析已完成！现在您可以就这份报告向我提问了。"}
+        )
+
+    # 显示历史对话
     for message in st.session_state.chat_messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
     # 接收用户输入
-    if prompt := st.chat_input("就分析报告提问，获取更深入的见解..."):
-        # 将用户消息添加到历史记录
+    if prompt := st.chat_input("就分析报告进行提问..."):
+        # 将用户输入添加到历史并显示
         st.session_state.chat_messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
 
-        # 准备发送给 vLLM 的消息列表，包含系统级上下文
-        messages_for_vllm = [
-                                {
-                                    "role": "system",
-                                    "content": f"你是一个专业的景区舆情分析师。你已经分析了一份评论数据，并生成了以下的分析报告：\n\n---报告开始---\n{st.session_state.analysis_report}\n---报告结束---\n\n现在，请根据这份报告和你的专业知识，回答用户的问题。"
-                                }
-                            ] + st.session_state.chat_messages
-
-        # 获取 AI 的响应
+        # 准备带有上下文的请求
         with st.chat_message("assistant"):
-            with st.spinner("AI 正在思考..."):
-                response = get_chat_response(messages_for_vllm)
-                st.markdown(response)
+            with st.spinner("AI 思考中..."):
+                # 创建一个系统提示，为AI提供上下文
+                system_prompt = (
+                    "你是一位专业的景区舆情分析师。\n"
+                    f"你刚刚为用户生成了一份分析报告，报告内容如下：\n---报告开始---\n{st.session_state.suggestions}\n---报告结束---\n"
+                    "现在，请根据这份报告的内容，用简洁、专业的语言回答用户的问题。"
+                )
 
-        # 将 AI 的响应也添加到历史记录
-        st.session_state.chat_messages.append({"role": "assistant", "content": response})
-else:
-    st.info("请先上传文件并完成分析，以便启用对话功能。")
+                # 将系统提示和对话历史一起发送
+                messages_to_send = [{"role": "system", "content": system_prompt}] + st.session_state.chat_messages
+
+                try:
+                    response = vllm_client.chat.completions.create(
+                        model="deepseek-r1-distill-qwen-vllm",
+                        messages=messages_to_send
+                    )
+                    cleaned_response = clean_think_tags(response.choices[0].message.content)
+                    st.markdown(cleaned_response)
+                    # 将AI响应添加到历史
+                    st.session_state.chat_messages.append({"role": "assistant", "content": cleaned_response})
+                except Exception as e:
+                    error_msg = f"与AI对话时发生错误: {e}"
+                    st.error(error_msg)
