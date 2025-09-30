@@ -17,7 +17,7 @@ def set_page_background(image_file):
         /* --- 页面背景设置 --- */
         .stApp {{
             background-image: 
-                linear-gradient(rgba(0, 0, 0, 0.65), rgba(0, 0, 0, 0.65)), 
+                linear-gradient(rgba(0, 0, 0, 0.4), rgba(0, 0, 0, 0.4)), 
                 url(data:image/png;base64,{b64_encoded});
             background-size: cover;
             background-position: center;

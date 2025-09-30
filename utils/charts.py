@@ -74,7 +74,7 @@ def create_scenic_reviews_bar(df: pd.DataFrame):
             ),
             xaxis_opts=opts.AxisOpts(
                 axislabel_opts=opts.LabelOpts(color=TEXT_COLOR),
-                name_textstyle_opts=opts.TextStyleOpts(color=TEXT_COLOR)
+                name_textstyle_opts=opts.TextStyleOpts(color=TEXT_COLOR, font_size=8)
             ),
             yaxis_opts=opts.AxisOpts(
                 axislabel_opts=opts.LabelOpts(color=TEXT_COLOR, font_size=8),
@@ -206,7 +206,7 @@ def create_issue_details_horizontal_bar(df: pd.DataFrame):
             xaxis_opts=opts.AxisOpts(
                 axislabel_opts=opts.LabelOpts(rotate=60, color=TEXT_COLOR, font_size=8)
             ),
-            yaxis_opts=opts.AxisOpts(axislabel_opts=opts.LabelOpts(color=TEXT_COLOR)),
+            yaxis_opts=opts.AxisOpts(axislabel_opts=opts.LabelOpts(color=TEXT_COLOR, font_size=8)),
             tooltip_opts=opts.TooltipOpts(trigger="axis", axis_pointer_type="shadow"),
         )
     )
@@ -227,6 +227,7 @@ def create_platform_pie(df: pd.DataFrame):
             label_opts=opts.LabelOpts(
                 position="inside",
                 formatter="{b}: {c} ({d}%)",
+                color="white"
             )
         )
         .set_global_opts(
@@ -253,14 +254,16 @@ def create_sentiment_pie(df: pd.DataFrame):
             label_opts=opts.LabelOpts(
                 position="inside",
                 formatter="{b}: {d}%",
+                color="white"
             )
         )
         .set_global_opts(
             title_opts=opts.TitleOpts(
                 pos_left="center",
             ),
-            legend_opts=opts.LegendOpts(orient="vertical", pos_top="15%", pos_left="2%"),
+            legend_opts=opts.LegendOpts(is_show=False),
         )
+
     )
     return pie_chart
 
