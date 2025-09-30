@@ -5,6 +5,7 @@ from streamlit_echarts import st_pyecharts
 from utils import data_loader, style, charts
 import streamlit.components.v1 as components
 import time
+from utils.navigation import create_sidebar_navigation
 
 # --- 页面配置 ---
 # Streamlit要求set_page_config必须是第一个命令
@@ -13,6 +14,8 @@ st.set_page_config(
     page_icon="🗺️",
     layout="wide"
 )
+
+create_sidebar_navigation()
 
 # --- 加载数据和设置页面样式 ---
 # 应用背景图
